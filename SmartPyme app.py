@@ -2,7 +2,7 @@ import streamlit as st
 import sqlite3
 import bcrypt
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ==========================================
 # 1. CONFIGURACIÓN Y BASE DE DATOS
@@ -12,9 +12,10 @@ st.set_page_config(page_title="SmartPyme Dashboard", layout="wide")
 def init_db():
     conn = sqlite3.connect('smartpyme.db')
     c = conn.cursor()
-    # Tabla de Mipymes (Usuarios)
+    # Tabla de Mipymes (Ahora incluye nombre_empresa)
     c.execute('''CREATE TABLE IF NOT EXISTS empresas (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nombre_empresa TEXT,
                     email TEXT UNIQUE,
                     password BLOB)''')
     # Tabla de Inventario
@@ -27,15 +28,21 @@ def init_db():
                     stock_minimo INTEGER,
                     precio_venta REAL,
                     costo REAL)''')
-    # Tabla de Ventas
+    # Tabla de Ventas (Ahora incluye datos del cliente y canal de venta)
     c.execute('''CREATE TABLE IF NOT EXISTS ventas (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     empresa_id INTEGER,
                     producto_id INTEGER,
                     nombre_producto TEXT,
+                    categoria TEXT,
                     cantidad INTEGER,
                     total REAL,
-                    fecha TEXT)''')
+                    costo_total REAL,
+                    fecha TEXT,
+                    cliente_nombre TEXT,
+                    cliente_celular TEXT,
+                    cliente_edad TEXT,
+                    medio_venta TEXT)''')
     conn.commit()
     return conn
 
@@ -52,8 +59,7 @@ def check_password(password, hashed):
 
 if 'empresa_id' not in st.session_state:
     st.session_state['empresa_id'] = None
-if 'empresa_email' not in st.session_state:
-    st.session_state['empresa_email'] = None
+    st.session_state['empresa_nombre'] = None
 
 def login_register_ui():
     st.title("🔐 Acceso a SmartPyme")
@@ -64,24 +70,25 @@ def login_register_ui():
         pass_login = st.text_input("Contraseña", type="password", key="login_pass")
         if st.button("Ingresar"):
             c = conn.cursor()
-            c.execute("SELECT id, password FROM empresas WHERE email=?", (email_login,))
+            c.execute("SELECT id, password, nombre_empresa FROM empresas WHERE email=?", (email_login,))
             user = c.fetchone()
             if user and check_password(pass_login, user[1]):
                 st.session_state['empresa_id'] = user[0]
-                st.session_state['empresa_email'] = email_login
+                st.session_state['empresa_nombre'] = user[2]
                 st.rerun()
             else:
                 st.error("Credenciales incorrectas")
 
     with tab2:
-        email_reg = st.text_input("Nuevo Correo Electrónico")
-        pass_reg = st.text_input("Nueva Contraseña", type="password")
+        nombre_reg = st.text_input("Nombre de la Empresa")
+        email_reg = st.text_input("Correo Electrónico (Para recuperación)")
+        pass_reg = st.text_input("Contraseña", type="password")
         if st.button("Registrar Mipyme"):
-            if email_reg and pass_reg:
+            if nombre_reg and email_reg and pass_reg:
                 try:
                     c = conn.cursor()
-                    c.execute("INSERT INTO empresas (email, password) VALUES (?, ?)", 
-                              (email_reg, hash_password(pass_reg)))
+                    c.execute("INSERT INTO empresas (nombre_empresa, email, password) VALUES (?, ?, ?)", 
+                              (nombre_reg, email_reg, hash_password(pass_reg)))
                     conn.commit()
                     st.success("Empresa registrada. Ahora puedes iniciar sesión.")
                 except sqlite3.IntegrityError:
@@ -93,8 +100,8 @@ def login_register_ui():
 # 3. MÓDULOS DE LA APLICACIÓN
 # ==========================================
 def app_ui():
-    st.sidebar.title(f"🏢 {st.session_state['empresa_email']}")
-    menu = st.sidebar.radio("Navegación", ["📊 Dashboard", "📦 Inventario", "💰 Nueva Venta"])
+    st.sidebar.title(f"🏢 {st.session_state['empresa_nombre']}")
+    menu = st.sidebar.radio("Navegación", ["📊 Analítica Avanzada", "📦 Inventario y Valor", "💰 Punto de Venta"])
     
     if st.sidebar.button("Cerrar Sesión"):
         st.session_state['empresa_id'] = None
@@ -103,115 +110,165 @@ def app_ui():
     empresa_id = st.session_state['empresa_id']
 
     # --- MÓDULO DE INVENTARIO ---
-    if menu == "📦 Inventario":
+    if menu == "📦 Inventario y Valor":
         st.header("Gestión de Inventario")
-        with st.form("nuevo_producto"):
-            col1, col2 = st.columns(2)
-            nombre = col1.text_input("Nombre del Producto")
-            categoria = col2.text_input("Categoría")
-            stock = col1.number_input("Stock Inicial", min_value=0, step=1)
-            stock_minimo = col2.number_input("Stock Mínimo (Alerta)", min_value=0, step=1)
-            precio = col1.number_input("Precio de Venta ($)", min_value=0.0)
-            costo = col2.number_input("Costo Unitario ($)", min_value=0.0)
-            
-            if st.form_submit_button("Guardar Producto"):
-                c = conn.cursor()
-                c.execute('''INSERT INTO productos 
-                             (empresa_id, nombre, categoria, stock, stock_minimo, precio_venta, costo) 
-                             VALUES (?, ?, ?, ?, ?, ?, ?)''', 
-                          (empresa_id, nombre, categoria, stock, stock_minimo, precio, costo))
-                conn.commit()
-                st.success("Producto agregado exitosamente.")
+        with st.expander("➕ Agregar Nuevo Producto"):
+            with st.form("nuevo_producto"):
+                col1, col2 = st.columns(2)
+                nombre = col1.text_input("Nombre del Producto")
+                categoria = col2.text_input("Categoría")
+                stock = col1.number_input("Stock Inicial", min_value=0, step=1)
+                stock_minimo = col2.number_input("Stock Mínimo (Alerta)", min_value=0, step=1)
+                precio = col1.number_input("Precio de Venta ($)", min_value=0.0)
+                costo = col2.number_input("Costo Unitario ($)", min_value=0.0)
+                
+                if st.form_submit_button("Guardar Producto"):
+                    c = conn.cursor()
+                    c.execute('''INSERT INTO productos 
+                                 (empresa_id, nombre, categoria, stock, stock_minimo, precio_venta, costo) 
+                                 VALUES (?, ?, ?, ?, ?, ?, ?)''', 
+                              (empresa_id, nombre, categoria, stock, stock_minimo, precio, costo))
+                    conn.commit()
+                    st.success("Producto agregado.")
+                    st.rerun()
         
-        st.subheader("Catálogo Actual")
-        df_inv = pd.read_sql_query(f"SELECT nombre, categoria, stock, stock_minimo, precio_venta FROM productos WHERE empresa_id={empresa_id}", conn)
-        st.dataframe(df_inv, use_container_width=True)
+        st.subheader("Catálogo de Productos y Márgenes")
+        df_inv = pd.read_sql_query(f"SELECT nombre, categoria, stock, stock_minimo, costo, precio_venta FROM productos WHERE empresa_id={empresa_id}", conn)
+        
+        if not df_inv.empty:
+            # Cálculos de inventario solicitados
+            df_inv['Margen de Ganancia (%)'] = ((df_inv['precio_venta'] - df_inv['costo']) / df_inv['precio_venta']) * 100
+            df_inv['Valor Stock (Costo Neto)'] = df_inv['stock'] * df_inv['costo']
+            df_inv['Valor Stock (Venta Bruto)'] = df_inv['stock'] * df_inv['precio_venta']
+            
+            # Formatear tabla para que sea ordenable
+            st.dataframe(df_inv.style.format({
+                'costo': '${:,.2f}', 'precio_venta': '${:,.2f}', 
+                'Margen de Ganancia (%)': '{:.2f}%',
+                'Valor Stock (Costo Neto)': '${:,.2f}', 'Valor Stock (Venta Bruto)': '${:,.2f}'
+            }), use_container_width=True)
+            
+            # Totales de la empresa
+            st.markdown("### 💰 Valor Total del Inventario Actual")
+            col1, col2 = st.columns(2)
+            col1.metric("Valor Neto (Lo que invertiste)", f"${df_inv['Valor Stock (Costo Neto)'].sum():,.2f}")
+            col2.metric("Valor Bruto (Si vendes todo)", f"${df_inv['Valor Stock (Venta Bruto)'].sum():,.2f}")
+        else:
+            st.info("Agrega productos para ver tu inventario.")
 
     # --- MÓDULO DE VENTAS Y FACTURACIÓN ---
-    elif menu == "💰 Nueva Venta":
+    elif menu == "💰 Punto de Venta":
         st.header("Registro de Ventas")
         c = conn.cursor()
-        c.execute("SELECT id, nombre, precio_venta, stock FROM productos WHERE empresa_id=? AND stock > 0", (empresa_id,))
+        c.execute("SELECT id, nombre, precio_venta, stock, costo, categoria FROM productos WHERE empresa_id=? AND stock > 0", (empresa_id,))
         productos = c.fetchall()
         
         if not productos:
-            st.warning("No hay productos con stock disponible. Ve a inventario.")
+            st.warning("No hay productos con stock. Ve a inventario.")
         else:
-            prod_dict = {f"{p[1]} - ${p[2]} (Stock: {p[3]})": p for p in productos}
-            seleccion = st.selectbox("Seleccionar Producto", list(prod_dict.keys()))
-            prod_info = prod_dict[seleccion]
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Datos de la Venta")
+                prod_dict = {f"{p[1]} - ${p[2]} (Stock: {p[3]})": p for p in productos}
+                seleccion = st.selectbox("Seleccionar Producto", list(prod_dict.keys()))
+                prod_info = prod_dict[seleccion]
+                cantidad = st.number_input("Cantidad", min_value=1, max_value=prod_info[3], step=1)
+                medio_venta = st.selectbox("Medio de Venta", ["Físico", "Marketplace", "Live", "E-commerce"])
             
-            cantidad = st.number_input("Cantidad", min_value=1, max_value=prod_info[3], step=1)
+            with col2:
+                st.subheader("Datos del Cliente (Opcional)")
+                cliente_nombre = st.text_input("Nombre del Cliente")
+                cliente_celular = st.text_input("Celular")
+                cliente_edad = st.text_input("Edad")
+
             subtotal = cantidad * prod_info[2]
-            st.write(f"*Total a Pagar:* ${subtotal:,.2f}")
+            costo_total = cantidad * prod_info[4]
+            categoria_prod = prod_info[5]
+            st.markdown(f"### *Total a Cobrar:* ${subtotal:,.2f}")
             
             if st.button("Registrar Venta y Generar Factura"):
                 fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                # Insertar venta
-                c.execute("INSERT INTO ventas (empresa_id, producto_id, nombre_producto, cantidad, total, fecha) VALUES (?, ?, ?, ?, ?, ?)",
-                          (empresa_id, prod_info[0], prod_info[1], cantidad, subtotal, fecha_actual))
+                # Insertar venta con todos los datos
+                c.execute('''INSERT INTO ventas 
+                            (empresa_id, producto_id, nombre_producto, categoria, cantidad, total, costo_total, fecha, cliente_nombre, cliente_celular, cliente_edad, medio_venta) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                          (empresa_id, prod_info[0], prod_info[1], categoria_prod, cantidad, subtotal, costo_total, fecha_actual, cliente_nombre, cliente_celular, cliente_edad, medio_venta))
                 # Descontar stock
                 c.execute("UPDATE productos SET stock = stock - ? WHERE id = ?", (cantidad, prod_info[0]))
                 conn.commit()
                 
-                # FACTURA BÁSICA
-                st.success("✅ Venta registrada con éxito")
+                # FACTURA
+                st.success("✅ Venta registrada")
                 st.markdown("---")
                 st.markdown(f"### FACTURA DE VENTA")
-                st.markdown(f"*Empresa:* {st.session_state['empresa_email']}<br>*Fecha:* {fecha_actual}", unsafe_allow_html=True)
+                st.markdown(f"*Empresa:* {st.session_state['empresa_nombre']}<br>*Fecha:* {fecha_actual}<br>*Cliente:* {cliente_nombre} / {cliente_celular}", unsafe_allow_html=True)
                 st.table(pd.DataFrame([{"Producto": prod_info[1], "Cantidad": cantidad, "Precio Unitario": f"${prod_info[2]:,.2f}", "Subtotal": f"${subtotal:,.2f}"}]))
                 st.markdown(f"### TOTAL: ${subtotal:,.2f}")
-                st.markdown("milcolores haz brillar tu look") # Mensaje solicitado
+                st.markdown("*milcolores haz brillar tu look*") # Requisito del prompt[span_0](start_span)[span_0](end_span)
                 st.markdown("---")
 
-    # --- CORAZÓN DEL DASHBOARD (DIAGNÓSTICO) ---
-    elif menu == "📊 Dashboard":
-        st.header("Diagnóstico Gerencial de la Empresa")
+    # --- MÓDULO DE ANALÍTICA AVANZADA ---
+    elif menu == "📊 Analítica Avanzada":
+        st.header("Análisis de Rendimiento de la Empresa")
         
-        # Cargar datos
         df_ventas = pd.read_sql_query(f"SELECT * FROM ventas WHERE empresa_id={empresa_id}", conn)
-        df_prod = pd.read_sql_query(f"SELECT * FROM productos WHERE empresa_id={empresa_id}", conn)
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.success("🟢 Lo que se está haciendo bien (Fortalezas)")
-            if not df_ventas.empty:
-                top_productos = df_ventas.groupby('nombre_producto')['cantidad'].sum().nlargest(3).reset_index()
-                st.write("*Top 3 Productos Más Vendidos:*")
-                st.dataframe(top_productos)
-                ingresos_totales = df_ventas['total'].sum()
-                st.metric("Ingresos Totales", f"${ingresos_totales:,.2f}")
-            else:
-                st.info("Aún no hay datos de ventas registrados.")
-
-        with col2:
-            st.error("🔴 Lo que no va tan bien (Alertas)")
-            if not df_prod.empty:
-                stock_critico = df_prod[df_prod['stock'] <= df_prod['stock_minimo']]
-                if not stock_critico.empty:
-                    st.warning("Productos en Stock Crítico o Agotados:")
-                    st.dataframe(stock_critico[['nombre', 'stock', 'stock_minimo']])
-                else:
-                    st.write("Todos los inventarios están en niveles saludables.")
-            else:
-                st.info("No hay productos registrados en el inventario.")
-
-        st.markdown("---")
-        st.info("💡 ¿En qué enfocarse?")
-        if not df_ventas.empty and not df_prod.empty:
-            if not stock_critico.empty:
-                st.write("- *Urgente:* Reabastecer los productos en alerta roja para no perder oportunidades de venta.")
-            # Sugerencia de rentabilidad básica
-            df_prod['margen'] = ((df_prod['precio_venta'] - df_prod['costo']) / df_prod['precio_venta']) * 100
-            baja_rentabilidad = df_prod[df_prod['margen'] < 20]
-            if not baja_rentabilidad.empty:
-                st.write("- *Rentabilidad:* Los siguientes productos tienen un margen menor al 20%. Considera ajustar sus precios de venta:")
-                st.write(', '.join(baja_rentabilidad['nombre'].tolist()))
-            else:
-                st.write("- Mantén la estrategia actual, tus márgenes y operaciones están estables.")
+        if df_ventas.empty:
+            st.info("Registra ventas para ver el análisis de datos.")
         else:
-            st.write("- Empieza a registrar tus productos y ventas para recibir sugerencias automáticas.")
+            df_ventas['fecha'] = pd.to_datetime(df_ventas['fecha'])
+            
+            # FILTROS DE TIEMPO
+            filtro_tiempo = st.radio("Filtrar Análisis por:", ["Todo", "Hoy", "Esta Semana", "Este Mes", "Este Año"], horizontal=True)
+            
+            hoy = datetime.now()
+            if filtro_tiempo == "Hoy":
+                df_filtrado = df_ventas[df_ventas['fecha'].dt.date == hoy.date()]
+            elif filtro_tiempo == "Esta Semana":
+                df_filtrado = df_ventas[df_ventas['fecha'] >= (hoy - timedelta(days=7))]
+            elif filtro_tiempo == "Este Mes":
+                df_filtrado = df_ventas[df_ventas['fecha'].dt.month == hoy.month]
+            elif filtro_tiempo == "Este Año":
+                df_filtrado = df_ventas[df_ventas['fecha'].dt.year == hoy.year]
+            else:
+                df_filtrado = df_ventas
+            
+            if df_filtrado.empty:
+                st.warning("No hay ventas en este periodo.")
+            else:
+                # CÁLCULO DE MARGEN PROMEDIO DEL PERIODO
+                ingresos_totales = df_filtrado['total'].sum()
+                costos_totales = df_filtrado['costo_total'].sum()
+                margen_promedio = ((ingresos_totales - costos_totales) / ingresos_totales) * 100 if ingresos_totales > 0 else 0
+                
+                col1, col2 = st.columns(2)
+                col1.metric(f"Ventas Totales ({filtro_tiempo})", f"${ingresos_totales:,.2f}")
+                col2.metric("Margen Promedio de Ganancia", f"{margen_promedio:.2f}%")
+                
+                st.markdown("---")
+                # ANÁLISIS DE PRODUCTOS (Reemplaza el top fijo por tabla interactiva)
+                st.subheader("Rendimiento por Productos (Ordenable)")
+                st.write("Haz clic en las columnas para ordenar por más/menos vendidos o mayor/menor rentabilidad.")
+                prod_agrupados = df_filtrado.groupby('nombre_producto').agg(
+                    Unidades_Vendidas=('cantidad', 'sum'),
+                    Ingresos_Totales=('total', 'sum'),
+                    Costos=('costo_total', 'sum')
+                ).reset_index()
+                prod_agrupados['Margen (%)'] = ((prod_agrupados['Ingresos_Totales'] - prod_agrupados['Costos']) / prod_agrupados['Ingresos_Totales']) * 100
+                st.dataframe(prod_agrupados.style.format({'Ingresos_Totales': '${:,.2f}', 'Costos': '${:,.2f}', 'Margen (%)': '{:.2f}%'}), use_container_width=True)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    # CATEGORÍAS MÁS VENDIDAS
+                    st.subheader("Ventas por Categoría")
+                    cat_agrupadas = df_filtrado.groupby('categoria')['cantidad'].sum().reset_index().sort_values('cantidad', ascending=False)
+                    st.dataframe(cat_agrupadas, use_container_width=True)
+                
+                with col2:
+                    # VENTAS POR MEDIO/CANAL
+                    st.subheader("Ventas por Canal (Medio)")
+                    canales = df_filtrado.groupby('medio_venta')['total'].sum().reset_index().sort_values('total', ascending=False)
+                    st.dataframe(canales.style.format({'total': '${:,.2f}'}), use_container_width=True)
 
 # Lógica de enrutamiento
 if st.session_state['empresa_id'] is None:
