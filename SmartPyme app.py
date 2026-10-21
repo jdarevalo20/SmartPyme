@@ -5,19 +5,23 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 # ==========================================
-# 1. CONFIGURACIÓN Y BASE DE DATOS
+# 1. CONFIGURACIÓN Y BASE DE DATOS (CACHÉ ESTABILIZADO)
 # ==========================================
 st.set_page_config(page_title="SmartPyme Dashboard", layout="wide")
 
+# El decorador cache_resource mantiene viva la base de datos y evita el error "no such table"
+@st.cache_resource
 def init_db():
-    conn = sqlite3.connect('smartpyme.db')
+    conn = sqlite3.connect('smartpyme.db', check_same_thread=False)
     c = conn.cursor()
-    # Tabla de Mipymes (Ahora incluye nombre_empresa)
+    
+    # Tabla de Mipymes
     c.execute('''CREATE TABLE IF NOT EXISTS empresas (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     nombre_empresa TEXT,
                     email TEXT UNIQUE,
                     password BLOB)''')
+                    
     # Tabla de Inventario
     c.execute('''CREATE TABLE IF NOT EXISTS productos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +32,8 @@ def init_db():
                     stock_minimo INTEGER,
                     precio_venta REAL,
                     costo REAL)''')
-    # Tabla de Ventas (Ahora incluye datos del cliente y canal de venta)
+                    
+    # Tabla de Ventas
     c.execute('''CREATE TABLE IF NOT EXISTS ventas (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     empresa_id INTEGER,
@@ -81,7 +86,7 @@ def login_register_ui():
 
     with tab2:
         nombre_reg = st.text_input("Nombre de la Empresa")
-        email_reg = st.text_input("Correo Electrónico (Para recuperación)")
+        email_reg = st.text_input("Correo Electrónico")
         pass_reg = st.text_input("Contraseña", type="password")
         if st.button("Registrar Mipyme"):
             if nombre_reg and email_reg and pass_reg:
@@ -136,19 +141,16 @@ def app_ui():
         df_inv = pd.read_sql_query(f"SELECT nombre, categoria, stock, stock_minimo, costo, precio_venta FROM productos WHERE empresa_id={empresa_id}", conn)
         
         if not df_inv.empty:
-            # Cálculos de inventario solicitados
             df_inv['Margen de Ganancia (%)'] = ((df_inv['precio_venta'] - df_inv['costo']) / df_inv['precio_venta']) * 100
             df_inv['Valor Stock (Costo Neto)'] = df_inv['stock'] * df_inv['costo']
             df_inv['Valor Stock (Venta Bruto)'] = df_inv['stock'] * df_inv['precio_venta']
             
-            # Formatear tabla para que sea ordenable
             st.dataframe(df_inv.style.format({
                 'costo': '${:,.2f}', 'precio_venta': '${:,.2f}', 
                 'Margen de Ganancia (%)': '{:.2f}%',
                 'Valor Stock (Costo Neto)': '${:,.2f}', 'Valor Stock (Venta Bruto)': '${:,.2f}'
             }), use_container_width=True)
             
-            # Totales de la empresa
             st.markdown("### 💰 Valor Total del Inventario Actual")
             col1, col2 = st.columns(2)
             col1.metric("Valor Neto (Lo que invertiste)", f"${df_inv['Valor Stock (Costo Neto)'].sum():,.2f}")
@@ -188,23 +190,20 @@ def app_ui():
             
             if st.button("Registrar Venta y Generar Factura"):
                 fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                # Insertar venta con todos los datos
                 c.execute('''INSERT INTO ventas 
                             (empresa_id, producto_id, nombre_producto, categoria, cantidad, total, costo_total, fecha, cliente_nombre, cliente_celular, cliente_edad, medio_venta) 
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                           (empresa_id, prod_info[0], prod_info[1], categoria_prod, cantidad, subtotal, costo_total, fecha_actual, cliente_nombre, cliente_celular, cliente_edad, medio_venta))
-                # Descontar stock
                 c.execute("UPDATE productos SET stock = stock - ? WHERE id = ?", (cantidad, prod_info[0]))
                 conn.commit()
                 
-                # FACTURA
                 st.success("✅ Venta registrada")
                 st.markdown("---")
                 st.markdown(f"### FACTURA DE VENTA")
                 st.markdown(f"*Empresa:* {st.session_state['empresa_nombre']}<br>*Fecha:* {fecha_actual}<br>*Cliente:* {cliente_nombre} / {cliente_celular}", unsafe_allow_html=True)
                 st.table(pd.DataFrame([{"Producto": prod_info[1], "Cantidad": cantidad, "Precio Unitario": f"${prod_info[2]:,.2f}", "Subtotal": f"${subtotal:,.2f}"}]))
                 st.markdown(f"### TOTAL: ${subtotal:,.2f}")
-                st.markdown("*milcolores haz brillar tu look*") # Requisito del prompt[span_0](start_span)[span_0](end_span)
+                st.markdown("*milcolores haz brillar tu look*")
                 st.markdown("---")
 
     # --- MÓDULO DE ANALÍTICA AVANZADA ---
@@ -212,16 +211,16 @@ def app_ui():
         st.header("Análisis de Rendimiento de la Empresa")
         
         df_ventas = pd.read_sql_query(f"SELECT * FROM ventas WHERE empresa_id={empresa_id}", conn)
+        df_prod = pd.read_sql_query(f"SELECT * FROM productos WHERE empresa_id={empresa_id}", conn)
         
         if df_ventas.empty:
             st.info("Registra ventas para ver el análisis de datos.")
         else:
             df_ventas['fecha'] = pd.to_datetime(df_ventas['fecha'])
             
-            # FILTROS DE TIEMPO
             filtro_tiempo = st.radio("Filtrar Análisis por:", ["Todo", "Hoy", "Esta Semana", "Este Mes", "Este Año"], horizontal=True)
-            
             hoy = datetime.now()
+            
             if filtro_tiempo == "Hoy":
                 df_filtrado = df_ventas[df_ventas['fecha'].dt.date == hoy.date()]
             elif filtro_tiempo == "Esta Semana":
@@ -236,7 +235,6 @@ def app_ui():
             if df_filtrado.empty:
                 st.warning("No hay ventas en este periodo.")
             else:
-                # CÁLCULO DE MARGEN PROMEDIO DEL PERIODO
                 ingresos_totales = df_filtrado['total'].sum()
                 costos_totales = df_filtrado['costo_total'].sum()
                 margen_promedio = ((ingresos_totales - costos_totales) / ingresos_totales) * 100 if ingresos_totales > 0 else 0
@@ -246,29 +244,43 @@ def app_ui():
                 col2.metric("Margen Promedio de Ganancia", f"{margen_promedio:.2f}%")
                 
                 st.markdown("---")
-                # ANÁLISIS DE PRODUCTOS (Reemplaza el top fijo por tabla interactiva)
+                
+                # --- DIAGNÓSTICO ESTRATÉGICO ---
+                st.subheader("💡 Diagnóstico Gerencial")
+                col_bien, col_mal = st.columns(2)
+                
+                with col_bien:
+                    st.success("🟢 Lo que se está haciendo bien")
+                    top_prod = df_filtrado.groupby('nombre_producto')['cantidad'].sum().nlargest(2).reset_index()
+                    st.write(f"Tus productos estrella son: *{', '.join(top_prod['nombre_producto'].tolist())}*")
+                    canal_top = df_filtrado.groupby('medio_venta')['total'].sum().idxmax()
+                    st.write(f"Tu mejor canal de ventas es: *{canal_top}*")
+                
+                with col_mal:
+                    st.error("🔴 Lo que no va tan bien y requiere enfoque")
+                    stock_critico = df_prod[df_prod['stock'] <= df_prod['stock_minimo']]
+                    if not stock_critico.empty:
+                        st.write("⚠️ *Stock Crítico:* Reabastece urgente estos productos:")
+                        st.write(', '.join(stock_critico['nombre'].tolist()))
+                    else:
+                        st.write("Tu inventario está estable por encima de los niveles mínimos.")
+                        
+                    prod_agrupados = df_filtrado.groupby('nombre_producto').agg(Ingresos=('total', 'sum'), Costos=('costo_total', 'sum'))
+                    prod_agrupados['Margen'] = ((prod_agrupados['Ingresos'] - prod_agrupados['Costos']) / prod_agrupados['Ingresos']) * 100
+                    margen_bajo = prod_agrupados[prod_agrupados['Margen'] < 20]
+                    if not margen_bajo.empty:
+                        st.write("📉 *Enfócate en los precios:* Estos productos dejan menos del 20% de ganancia:")
+                        st.write(', '.join(margen_bajo.index.tolist()))
+                
+                st.markdown("---")
                 st.subheader("Rendimiento por Productos (Ordenable)")
-                st.write("Haz clic en las columnas para ordenar por más/menos vendidos o mayor/menor rentabilidad.")
-                prod_agrupados = df_filtrado.groupby('nombre_producto').agg(
+                prod_tabla = df_filtrado.groupby('nombre_producto').agg(
                     Unidades_Vendidas=('cantidad', 'sum'),
                     Ingresos_Totales=('total', 'sum'),
                     Costos=('costo_total', 'sum')
                 ).reset_index()
-                prod_agrupados['Margen (%)'] = ((prod_agrupados['Ingresos_Totales'] - prod_agrupados['Costos']) / prod_agrupados['Ingresos_Totales']) * 100
-                st.dataframe(prod_agrupados.style.format({'Ingresos_Totales': '${:,.2f}', 'Costos': '${:,.2f}', 'Margen (%)': '{:.2f}%'}), use_container_width=True)
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    # CATEGORÍAS MÁS VENDIDAS
-                    st.subheader("Ventas por Categoría")
-                    cat_agrupadas = df_filtrado.groupby('categoria')['cantidad'].sum().reset_index().sort_values('cantidad', ascending=False)
-                    st.dataframe(cat_agrupadas, use_container_width=True)
-                
-                with col2:
-                    # VENTAS POR MEDIO/CANAL
-                    st.subheader("Ventas por Canal (Medio)")
-                    canales = df_filtrado.groupby('medio_venta')['total'].sum().reset_index().sort_values('total', ascending=False)
-                    st.dataframe(canales.style.format({'total': '${:,.2f}'}), use_container_width=True)
+                prod_tabla['Margen (%)'] = ((prod_tabla['Ingresos_Totales'] - prod_tabla['Costos']) / prod_tabla['Ingresos_Totales']) * 100
+                st.dataframe(prod_tabla.style.format({'Ingresos_Totales': '${:,.2f}', 'Costos': '${:,.2f}', 'Margen (%)': '{:.2f}%'}), use_container_width=True)
 
 # Lógica de enrutamiento
 if st.session_state['empresa_id'] is None:
