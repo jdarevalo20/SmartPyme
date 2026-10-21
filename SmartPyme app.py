@@ -5,17 +5,16 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 # ==========================================
-# 1. CONFIGURACIÓN Y BASE DE DATOS (CACHÉ ESTABILIZADO)
+# 1. CONFIGURACIÓN Y BASE DE DATOS
 # ==========================================
 st.set_page_config(page_title="SmartPyme Dashboard", layout="wide", page_icon="🏢")
 
-# El decorador asegura que la base de datos no se reinicie con la interfaz
-@st.cache_resource
+# Al quitar @st.cache_resource evitamos el error "no such table" en Streamlit Cloud
 def init_db():
     conn = sqlite3.connect('smartpyme.db', check_same_thread=False)
     c = conn.cursor()
     
-    # Tabla de Empresas (Mypimes)
+    # Tabla de Empresas
     c.execute('''CREATE TABLE IF NOT EXISTS empresas (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     nombre_empresa TEXT,
@@ -33,7 +32,7 @@ def init_db():
                     precio_venta REAL,
                     costo REAL)''')
                     
-    # Tabla de Ventas (Con analítica avanzada de clientes y canales)
+    # Tabla de Ventas
     c.execute('''CREATE TABLE IF NOT EXISTS ventas (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     empresa_id INTEGER,
@@ -62,7 +61,6 @@ def hash_password(password):
 def check_password(password, hashed):
     return bcrypt.checkpw(password.encode('utf-8'), hashed)
 
-# Inicializar variables de sesión
 if 'empresa_id' not in st.session_state:
     st.session_state['empresa_id'] = None
     st.session_state['empresa_nombre'] = None
@@ -148,7 +146,6 @@ def app_ui():
         df_inv = pd.read_sql_query(f"SELECT nombre, categoria, stock, stock_minimo, costo, precio_venta FROM productos WHERE empresa_id={empresa_id}", conn)
         
         if not df_inv.empty:
-            # Cálculos de rentabilidad y valoración
             df_inv['Margen Neto (%)'] = ((df_inv['precio_venta'] - df_inv['costo']) / df_inv['precio_venta']) * 100
             df_inv['Valor Bodega (Costo)'] = df_inv['stock'] * df_inv['costo']
             df_inv['Valor Proyectado (Venta)'] = df_inv['stock'] * df_inv['precio_venta']
@@ -296,7 +293,6 @@ def app_ui():
                     else:
                         st.write("- *Inventario:* Niveles operativos saludables.")
                         
-                    # Filtrar productos con margen bajo
                     prod_margen = df_filtro.groupby('nombre_producto').agg(Ingresos=('total', 'sum'), Costos=('costo_total', 'sum'))
                     prod_margen['Margen'] = ((prod_margen['Ingresos'] - prod_margen['Costos']) / prod_margen['Ingresos']) * 100
                     margen_bajo = prod_margen[prod_margen['Margen'] < 20]
@@ -306,11 +302,10 @@ def app_ui():
                 
                 st.markdown("---")
                 
-                # Tablas Detalladas Interactivos
+                # Tablas Detalladas Interactivas
                 st.subheader("Rendimiento a Detalle (Tablas Dinámicas)")
                 st.write("(Haz clic en los encabezados de las columnas para ordenar los datos a tu preferencia)")
                 
-                # 1. Rendimiento por Producto
                 st.markdown("*Desempeño por Producto*")
                 prod_tabla = df_filtro.groupby('nombre_producto').agg(
                     Unidades_Vendidas=('cantidad', 'sum'),
@@ -324,7 +319,6 @@ def app_ui():
                     'Rentabilidad Neta (%)': '{:.2f}%'
                 }), use_container_width=True, hide_index=True)
                 
-                # 2. Categorías y Canales
                 col_cat, col_can = st.columns(2)
                 with col_cat:
                     st.markdown("*Flujo por Categorías*")
